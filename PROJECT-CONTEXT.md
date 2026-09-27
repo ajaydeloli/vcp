@@ -123,12 +123,42 @@ A future session may exchange a freshly pasted request token automatically, but 
   - Covered by `tests/test_nse_xbrl_provider.py`, which runs **entirely offline** against real filing XML saved to `tests/fixtures/nse_xbrl/` (fetched live 2026-09-27, so the suite never depends on NSE being reachable or unchanged): parsing RELIANCE/CDSL correctly, the HDFCBANK `fields_missing` flag, malformed-XBRL returning `None` not raising, the index-metadata date fallback, and the filing-index row-filtering/date-window-param logic (via a fake session, no real HTTP).
   - **Not yet built:** the actual ingestion module (`fundamentals_update.py`) that calls `NSEXBRLProvider`, computes YoY growth via self-join, and upserts into `fundamentals_quarterly`; the Screener.in cross-check/fallback provider; and `_score_fundamentals()` itself. `NSEXBRLProvider` is a verified, working building block, not a finished pipeline.
 
+## Fundamentals ingestion — built and validated (2026-09-27)
+
+`sepa_scanner/ingestion/fundamentals_update.py` is implemented, mirroring the idempotent pattern of `daily_update.py`/`run_vcp_detection()`/`run_volume_signals()`/`run_scoring()`:
+
+- `run_fundamentals_update(provider, settings=None, symbols=None, end_date=None, initial_start_date=date(2018,1,1))` delta-fetches per active symbol keyed on `announcement_date` (matching how NSE's own endpoint windows), bulk-upserts into `fundamentals_quarterly` via a staged DataFrame with `ON CONFLICT (symbol, quarter_end) DO UPDATE`, archives every normalized filing actually received (consolidated + standalone, pre-dedup) to `data/raw/<run-id>/<symbol>.json`, and writes one `ingestion_log` row per run.
+- `_select_preferred_filings()` fixes the real corruption bug found during the first live validation attempt: NSE's filing index returns both a consolidated and a standalone filing per quarter, both keyed to the same `(symbol, quarter_end)` primary key. Consolidated is now always kept when both exist; standalone only as fallback. Order-independent — verified by `test_consolidated_filing_is_preferred_over_standalone_for_the_same_quarter`, which feeds standalone first and asserts consolidated still wins.
+- `_recompute_yoy_growth()` self-joins each touched symbol's full local history (320–410 day tolerance window around 365 days) to compute `eps_yoy_growth`/`sales_yoy_growth` at ingestion time, so `_score_fundamentals()` (not yet built) can stay a pure lookup. Reset-then-recompute, so a quarter that loses its qualifying prior-year match ends up `NULL`, not stale.
+- `fields_missing=True` rows (bank/NBFC taxonomy gap) force `eps_yoy_growth`/`sales_yoy_growth` to `NULL` on both sides of the comparison, never `0`.
+- Backlog filings (`announcement_date` far past `period_end`) are stored, not dropped, and flagged via `announcement_lag_days` / `is_backlog_filing` (threshold: `FundamentalsSettings.backlog_lag_threshold_days`, default 180 days, config-driven per project convention in `config/settings.py`).
+- `latest_fundamentals()` mirrors the other modules' read helpers.
+- `storage/schema.sql`'s `fundamentals_quarterly` now carries `period_start`, `announcement_date`, `source`, `fields_missing`, `announcement_lag_days`, `is_backlog_filing`, `ingested_at` alongside the original `eps`/`sales`/`roe`/`eps_yoy_growth`/`sales_yoy_growth`.
+- `tests/test_fundamentals_update.py` (6 tests) covers: normal YoY growth via the self-join, `fields_missing` → `NULL` not `0`, the backlog-filing flag (mirrors the real AHLWEST case), the consolidated-vs-standalone dedup regression above, idempotent rerun, and `latest_fundamentals()`. Full project suite: **52/52 passing**.
+
+### Live validation re-run, corrected (2026-09-27)
+
+Re-ran the RELIANCE/INFY/TCS/HDFCBANK/ICICIBANK batch after the dedup fix, against live NSE data (not fixtures) for FY23–FY25 (quarter-ends 2022-12-31 through 2024-12-31, 9 quarters each, 45 rows total). Corrected output:
+
+| Symbol | Quarters | EPS range | Growth computed | Notes |
+|---|---|---|---|---|
+| RELIANCE | 9 | ₹13.70–₹28.52 | Yes, from Dec-2023 quarter onward | Consolidated consistently selected — spot-checked FY25 Q3 (Dec-2024): stored 13.70 vs. the discarded standalone 6.44; FY25 Q2 (Sep-2024): stored 24.48 matching the originally-reported corrupted-run value, confirming the fix reproduces the correct number, not just a different one |
+| INFY | 9 | ₹14.37–₹19.25 | Yes | Clean, no `fields_missing` |
+| TCS | 9 | ₹29.64–₹34.37 | Yes | Clean, no `fields_missing` |
+| HDFCBANK | 9 | — | N/A | All 9 rows correctly `fields_missing=True` (bank XBRL taxonomy gap, as documented) — `eps`/`sales`/growth all `NULL`, never `0` |
+| ICICIBANK | 9 | — | N/A | Same as HDFCBANK |
+
+No duplicate `(symbol, quarter_end)` rows, no order-dependent EPS oscillation — the original corruption is confirmed fixed, not just less frequent.
+
+**New finding, not a code bug:** re-running the ingestion job against live NSE data today returned zero new rows for all five symbols (`symbols_updated: 0, rows_added: 0`). Checked directly against NSE's own filing-index endpoint (bypassing our provider) for each symbol across 2025: none of the five have any filing broadcast after their Jan-2025 filing (RELIANCE 16-Jan, TCS 9-Jan, INFY 16-Jan, HDFCBANK 23-Jan, ICICIBANK 25-Jan) — NSE's endpoint itself returns `[]` for later windows. This means live NSE coverage for these five names currently stops at the quarter ending Dec-2024; there is nothing our ingestion code is failing to fetch. Worth re-checking periodically rather than assuming the endpoint or these symbols' filing cadence is broken.
+
 ## Required next steps
 
-1. Build fundamentals ingestion (`sepa_scanner/ingestion/fundamentals_update.py`) on top of the now-verified `NSEXBRLProvider`: upsert into `fundamentals_quarterly` (schema needs the `period_end`→`announcement_date` fields per the spec, plus a `source` column distinguishing `"nse_xbrl"` from `"screener_fallback"`), compute YoY growth at ingestion time via self-join, and handle the two confirmed edge cases (bank/NBFC `fields_missing` rows, backlog filings where `announcement_date` is far from `period_end`) explicitly rather than letting them pass through silently. Then build `_score_fundamentals()` per `SEPA_FUNDAMENTAL_QUALITY_ENGINE_SPEC.md`'s v1 core (EPS growth + sales growth + ROE, banded, point-in-time-correct) before layering in acceleration/regime/consistency/deterioration-flags. The two-layer architecture and its config (`FundamentalsSettings`, including the off-by-default Screener.in fallback) are already decided and implemented in `config/settings.py`. Remember: even once built, fundamentals stays out of the composite (`weights.fundamentals` stays `0.0`) unless a backtest justifies otherwise.
-2. Add tests under `tests/` for RS rating and ingestion edge cases — these still do not have coverage.
-3. Build API endpoints — `sepa_scanner/api/main.py` currently only exposes `/health` and `/settings/provider`, with `/universe` and `/scores/today` returning empty placeholders — and connect the frontend to real data. `latest_scores()` and `calculate_symbol_score()` in `sepa_scanner/scoring/scorer.py` are ready to back `/scores/today` and `/stock/{symbol}` respectively.
-4. Wire `run_scoring()` into the daily pipeline/scheduler once one exists (Phase 7), after `run_market_stage_classification()`, `run_relative_strength_calculation()`, `run_vcp_detection()`, and `run_volume_signals()` — it depends on all four having already run for the same day.
+1. Investigate the live-data gap above before relying on this for anything beyond validation — confirm whether it's an NSE endpoint issue or genuinely reflects no results broadcast since Jan-2025 for these five names, then re-run the same batch to pick up anything newer once resolved.
+2. Build `_score_fundamentals()` per `SEPA_FUNDAMENTAL_QUALITY_ENGINE_SPEC.md`'s v1 core (EPS growth + sales growth + ROE, banded, point-in-time-correct) on top of the now-populated `fundamentals_quarterly`, before layering in acceleration/regime/consistency/deterioration-flags. Remember: even once built, fundamentals stays out of the composite (`weights.fundamentals` stays `0.0`) unless a backtest justifies otherwise.
+3. Add tests under `tests/` for RS rating and ingestion edge cases — these still do not have coverage.
+4. Build API endpoints — `sepa_scanner/api/main.py` currently only exposes `/health` and `/settings/provider`, with `/universe` and `/scores/today` returning empty placeholders — and connect the frontend to real data. `latest_scores()` and `calculate_symbol_score()` in `sepa_scanner/scoring/scorer.py` are ready to back `/scores/today` and `/stock/{symbol}` respectively.
+5. Wire `run_scoring()` into the daily pipeline/scheduler once one exists (Phase 7), after `run_market_stage_classification()`, `run_relative_strength_calculation()`, `run_vcp_detection()`, and `run_volume_signals()` — it depends on all four having already run for the same day. `run_fundamentals_update()` should run alongside these (fundamentals feed a future `_score_fundamentals()` display/filter path, not the composite itself, so ordering relative to `run_scoring()` doesn't matter yet).
 
 ## Implementation rules for future sessions
 

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local-first NSE VCP/SEPA screening and rating engine"
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.12",
     "duckdb>=1.1",
     "fastapi>=0.115",
     "kiteconnect>=5.0",

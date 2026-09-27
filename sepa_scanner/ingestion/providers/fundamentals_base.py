@@ -2,10 +2,28 @@
 
 Mirrors sepa_scanner/ingestion/providers/base.py's DataProvider/DailyBar
 pattern for the fundamentals side: a normalized record type plus a
-Protocol every fundamentals source (NSE/BSE XBRL first; Screener.in as a
-secondary cross-check/optional fallback per config -- see
-PROJECT-CONTEXT.md's "two-layer fundamentals data architecture") implements
-identically.
+Protocol every fundamentals source implements identically.
+
+As of 2026-09-27, Screener.in is the PRIMARY fundamentals source
+(ScreenerProvider); NSE/BSE XBRL (NSEXBRLProvider) is kept as an optional
+secondary/cross-check source, off by default -- reversed from the original
+"NSE primary, Screener fallback" design. Reason (see PROJECT-CONTEXT.md):
+live validation found there is no single NSE destination that reliably
+returns the newest filings for a symbol -- the windowed financial-results
+endpoint returned zero rows for several large-caps despite those symbols
+having filed elsewhere by the same date. Screener.in aggregates a
+pre-normalized trailing quarterly series per company (consolidated and
+standalone), sidestepping that gap and also sidestepping the bank/NBFC
+XBRL-taxonomy field-mapping gap NSEXBRLProvider hit for HDFCBANK.
+
+The trade-off: Screener's quarterly results page does not expose the
+regulatory announcement/broadcast date, only the reporting period. A
+Screener-sourced QuarterlyFiling's `announcement_date` is therefore an
+ESTIMATE (period_end + a configured typical reporting lag), flagged via
+`announcement_date_is_estimated=True` -- never a verified broadcast date
+the way NSEXBRLProvider's is. A consumer that needs a real, non-estimated
+broadcast date (e.g. to reliably detect a genuine backlog filing, as with
+the AHLWEST case below) should not rely on Screener-sourced rows for that.
 """
 
 from __future__ import annotations
@@ -49,6 +67,12 @@ class QuarterlyFiling:
     # gap (see PROJECT-CONTEXT.md), not a hypothetical one. A future
     # ingestion job must treat this as "unevaluated for this filer's
     # sector," not silently score it as zero growth.
+    announcement_date_is_estimated: bool = False
+    # True for Screener-sourced filings: Screener's quarterly page doesn't
+    # expose a real broadcast date, so `announcement_date` is period_end +
+    # a configured typical reporting lag, not a verified date. False (the
+    # default) for providers -- like NSEXBRLProvider -- that report a real
+    # regulatory broadcast date. See this module's docstring.
 
 
 class FundamentalsProvider(Protocol):

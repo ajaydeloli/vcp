@@ -42,16 +42,59 @@ CREATE TABLE IF NOT EXISTS universe (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- Point-in-time-correct quarterly fundamentals (PROJECT-CONTEXT.md "two-layer
+-- fundamentals data architecture"). period_start/quarter_end describe the
+-- reporting period; announcement_date is when the filing became public and
+-- is what a future consumer must gate on, never quarter_end -- a confirmed
+-- live case (AHLWEST) broadcast a quarter more than five years after its
+-- period_end. announcement_lag_days / is_backlog_filing surface that gap
+-- explicitly rather than silently treating an old filing as current.
+-- eps_yoy_growth/sales_yoy_growth are computed at ingestion time (self-join
+-- against the same symbol's row from ~4 quarters prior) so the scorer stays
+-- a pure lookup like every other component; both are NULL, never 0, when
+-- fields_missing is TRUE for either quarter (observed for banks/NBFCs,
+-- whose XBRL taxonomy doesn't map to revenue/PAT/basic EPS).
+-- roe is currently always NULL: QuarterlyFiling does not yet carry
+-- shareholders' equity/net worth, so it cannot be computed from what the
+-- NSE XBRL provider exposes today. Left as a column (per the design doc)
+-- rather than dropped, so a future provider enhancement can fill it without
+-- another schema migration.
 CREATE TABLE IF NOT EXISTS fundamentals_quarterly (
     symbol VARCHAR NOT NULL,
     quarter_end DATE NOT NULL,
+    period_start DATE,
+    announcement_date DATE,
     eps DOUBLE,
     sales DOUBLE,
+    roe DOUBLE,
     eps_yoy_growth DOUBLE,
     sales_yoy_growth DOUBLE,
-    roe DOUBLE,
+    source VARCHAR,
+    fields_missing BOOLEAN NOT NULL DEFAULT FALSE,
+    announcement_lag_days INTEGER,
+    is_backlog_filing BOOLEAN NOT NULL DEFAULT FALSE,
+    ingested_at TIMESTAMP,
+    -- True for rows sourced from a provider (Screener.in as of 2026-09-27)
+    -- that doesn't expose a real regulatory broadcast date, so
+    -- announcement_date is period_end + a configured typical lag rather
+    -- than a verified date. is_backlog_filing can only be trusted as a
+    -- genuine signal on a row where this is FALSE. See
+    -- sepa_scanner/ingestion/providers/fundamentals_base.py.
+    announcement_date_is_estimated BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (symbol, quarter_end)
 );
+
+-- Migration for a fundamentals_quarterly table created before the
+-- announcement_date_is_estimated column existed (CREATE TABLE IF NOT
+-- EXISTS above is a no-op against an already-created table, so a real
+-- deployed database needs this explicit ADD COLUMN). Safe to run every
+-- startup: IF NOT EXISTS makes it a no-op once the column is present.
+-- DuckDB does not support a NOT NULL constraint on ALTER TABLE ADD COLUMN
+-- ("Adding columns with constraints not yet supported"), so this column is
+-- nullable on a migrated table even though it's NOT NULL DEFAULT FALSE on
+-- a freshly created one; the DEFAULT FALSE still applies to existing rows
+-- and every write path in fundamentals_update.py always supplies a value.
+ALTER TABLE fundamentals_quarterly ADD COLUMN IF NOT EXISTS announcement_date_is_estimated BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS ingestion_log (
     run_id VARCHAR PRIMARY KEY,
