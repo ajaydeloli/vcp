@@ -9,7 +9,7 @@ test_scorer_persistence.py.
 
 from __future__ import annotations
 
-from sepa_scanner.scoring.scorer import calculate_composite_score
+from sepa_scanner.scoring.scorer import _load_config, calculate_composite_score
 
 TEST_CONFIG = {
     "weights": {
@@ -18,7 +18,10 @@ TEST_CONFIG = {
         "relative_strength": 0.20,
         "vcp_quality": 0.30,
         "volume_supply_demand": 0.05,
-        "fundamentals": 0.10,
+        # Kept at 0 to match the real config: fundamentals is a qualifier,
+        # not a composite input (see test_fundamentals_weight_is_zero_*
+        # below for the decision this locks in).
+        "fundamentals": 0.0,
     },
     "gates": {"trend_template_min_passes": 6, "relative_strength_min": 70},
     "stage_scores": {1: 50, 2: 100, 3: 25, 4: 0},
@@ -232,3 +235,53 @@ def test_relative_strength_new_high_bonus_is_capped_at_100():
     )
 
     assert result["relative_strength_score"] == 100.0
+
+
+def test_fundamentals_weight_is_zero_in_the_real_config():
+    """Locks in a deliberate design decision (see PROJECT-CONTEXT.md):
+    fundamentals is a qualifier/filter on the technical setup, not a
+    blended composite input. If this ever gets bumped above 0 again, it
+    should be a conscious, backtested change -- not a silent regression
+    from someone re-adding a default weight.
+    """
+    assert _load_config()["weights"]["fundamentals"] == 0.0
+
+
+def test_fundamentals_weight_zero_means_an_evaluated_score_cannot_move_the_composite():
+    """Even if a fundamentals engine existed and returned a real, evaluated
+    score, a weight of 0 must make it contribute nothing -- proving the
+    exclusion is enforced by the weight itself, not by fundamentals simply
+    never being evaluated today."""
+    shared_kwargs = dict(
+        daily_template=_passing_daily_template(),
+        weekly_template=_passing_weekly_template(),
+        stage=_stage_row(),
+        relative_strength=_rs_row(),
+        vcp=_vcp_row(),
+        volume=_volume_row(),
+        config=TEST_CONFIG,
+    )
+
+    without_fundamentals = calculate_composite_score(fundamentals=None, **shared_kwargs)
+    # calculate_composite_score() doesn't yet read the fundamentals argument
+    # (the engine isn't built), so this directly checks the weight's effect
+    # by calling _combine() the same way the function does internally, with
+    # a hypothetical fundamentals score mixed in.
+    from sepa_scanner.scoring.scorer import _combine
+
+    components_without = {
+        "trend_template": (without_fundamentals["trend_template_score"], True),
+        "stage": (without_fundamentals["stage_score"], True),
+        "relative_strength": (without_fundamentals["relative_strength_score"], True),
+        "vcp_quality": (without_fundamentals["vcp_score"], True),
+        "volume_supply_demand": (without_fundamentals["volume_score"], True),
+        "fundamentals": (None, False),
+    }
+    components_with_low_fundamentals = dict(components_without, fundamentals=(5.0, True))
+    components_with_high_fundamentals = dict(components_without, fundamentals=(95.0, True))
+
+    baseline = _combine(components_without, TEST_CONFIG["weights"])
+    with_low = _combine(components_with_low_fundamentals, TEST_CONFIG["weights"])
+    with_high = _combine(components_with_high_fundamentals, TEST_CONFIG["weights"])
+
+    assert baseline == with_low == with_high

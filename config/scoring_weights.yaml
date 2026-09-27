@@ -4,7 +4,16 @@ weights:
   relative_strength: 0.20
   vcp_quality: 0.30
   volume_supply_demand: 0.05
-  fundamentals: 0.10
+  # Deliberately 0, not just "currently unevaluated". Fundamentals are a
+  # qualifier/filter on top of the technical setup (PROJECT-DESIGN.md §6.6),
+  # not a blended input to it: bad or missing fundamentals data should never
+  # be able to silently move a symbol's technical ranking. The fundamentals
+  # engine still computes and persists fundamentals_score/regime/flags for
+  # display and for use as a separate filter -- it's excluded from the
+  # composite math specifically, via this weight, not by leaving it
+  # unimplemented. Promoting it into the composite later (once backtested
+  # to actually add value) is this one number changing, nothing else.
+  fundamentals: 0.0
 
 gates:
   trend_template_min_passes: 6

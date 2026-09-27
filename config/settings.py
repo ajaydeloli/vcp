@@ -46,6 +46,35 @@ class UpstoxSettings(BaseModel):
         return bool(self.client_id and self.client_secret and self.access_token)
 
 
+class FundamentalsSettings(BaseModel):
+    """Configuration for the two-layer fundamentals data architecture:
+    NSE/BSE exchange XBRL filings as the primary source of truth, with
+    Screener.in as a secondary, sampled cross-check. See PROJECT-CONTEXT.md
+    ("Phase 3 progress") for the full reasoning.
+    """
+
+    fallback_source: Literal["none", "screener"] = "none"
+    # If a symbol-quarter's NSE/BSE XBRL filing fails to fetch or parse and
+    # this is "screener", ingestion fetches that one symbol-quarter from
+    # Screener.in instead. The resulting fundamentals_quarterly row must
+    # always be tagged source="screener_fallback" (vs. "nse_xbrl") so
+    # fallback data stays distinguishable from primary data downstream --
+    # it never silently masquerades as a verified exchange filing. Default
+    # is "none": a missing primary data point stays unevaluated (consistent
+    # with how every other analytics component already treats missing
+    # data) rather than being silently filled from a source with no
+    # official API. Turn this on deliberately, not as a default-on
+    # convenience.
+
+    cross_check_enabled: bool = True
+    # Independent of fallback_source. Periodically re-fetches a sample of
+    # symbol-quarters from Screener.in purely to compare against the
+    # already-stored NSE/BSE XBRL value and flag disagreements in a
+    # data-quality report -- mirrors sepa_scanner/ingestion/data_quality.py.
+    # Never writes to fundamentals_quarterly.
+    cross_check_sample_pct: float = 0.10
+
+
 class Settings(BaseSettings):
     """Runtime configuration. Secrets stay in environment variables, never source control."""
 
@@ -64,6 +93,7 @@ class Settings(BaseSettings):
     kite: KiteSettings = KiteSettings()
     dhan: DhanSettings = DhanSettings()
     upstox: UpstoxSettings = UpstoxSettings()
+    fundamentals: FundamentalsSettings = FundamentalsSettings()
 
     @property
     def provider_configured(self) -> bool:
