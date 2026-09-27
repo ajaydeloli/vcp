@@ -1,0 +1,2 @@
+"""SEPA Scanner application package."""
+

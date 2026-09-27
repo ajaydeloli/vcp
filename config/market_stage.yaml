@@ -1,0 +1,16 @@
+periods:
+  daily:
+    short: 50
+    medium: 150
+    long: 200
+    slope_lookback: 21
+  weekly:
+    short: 10
+    medium: 30
+    long: 40
+    slope_lookback: 4
+
+thresholds:
+  stage_2_min_trend_template_passes: 6
+  flat_ma_slope_fraction: 0.02
+  extended_above_short_ma_fraction: 0.20

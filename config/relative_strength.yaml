@@ -1,0 +1,11 @@
+lookbacks:
+  three_month_sessions: 63
+  six_month_sessions: 126
+  nine_month_sessions: 189
+  twelve_month_sessions: 252
+
+weights:
+  three_month: 0.40
+  six_month: 0.20
+  nine_month: 0.20
+  twelve_month: 0.20

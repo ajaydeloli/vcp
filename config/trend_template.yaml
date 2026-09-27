@@ -1,0 +1,19 @@
+# Weekly windows approximate the same calendar spans as the daily session windows.
+periods:
+  daily:
+    short: 50
+    medium: 150
+    long: 200
+    month: 21
+    year: 252
+  weekly:
+    short: 10
+    medium: 30
+    long: 40
+    month: 4
+    year: 52
+
+criteria:
+  minimum_gain_from_52_week_low: 0.25
+  maximum_decline_from_52_week_high: 0.25
+  minimum_relative_strength_rating: 70

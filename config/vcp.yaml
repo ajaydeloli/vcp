@@ -1,0 +1,18 @@
+weekly:
+  lookback_weeks: 65
+  swing_window_weeks: 2
+  min_contractions: 2
+  max_contractions: 4
+  contraction_tolerance: 0.80
+  volume_decay_min: 0.40
+  volume_decay_max: 0.60
+  base_length_min_weeks: 5
+  base_length_max_weeks: 65
+
+daily_confirmation:
+  lookback_sessions: 10
+  tight_close_tolerance: 0.015
+  minimum_tight_closes: 3
+  pivot_proximity: 0.05
+  breakout_volume_lookback: 20
+  breakout_volume_multiple: 1.40

@@ -1,0 +1,11 @@
+up_down_volume:
+  lookback_sessions: 50
+
+accumulation_distribution:
+  lookback_sessions: 50
+
+pivot_volume_spike:
+  lookback_sessions: 10
+  proximity_fraction: 0.05
+  volume_average_lookback: 20
+  volume_multiple: 1.40

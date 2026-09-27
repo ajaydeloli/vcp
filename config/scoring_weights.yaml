@@ -1,0 +1,48 @@
+weights:
+  trend_template: 0.25
+  stage: 0.10
+  relative_strength: 0.20
+  vcp_quality: 0.30
+  volume_supply_demand: 0.05
+  fundamentals: 0.10
+
+gates:
+  trend_template_min_passes: 6
+  relative_strength_min: 70
+
+# Maps a stored market_stages_daily stage (1-4) to a 0-100 sub-score. Stage 2
+# (advancing) is the only stage Minervini actually wants to be buying in.
+stage_scores:
+  1: 50
+  2: 100
+  3: 25
+  4: 0
+
+relative_strength:
+  # Added on top of the raw 1-99 rating when the RS line makes a new high
+  # before price does (design doc §6.3) -- a leading signal worth a small
+  # bonus, capped so the component score never exceeds 100.
+  new_high_bonus: 5
+
+# How much of the VCP Pattern Quality component comes from the weekly
+# structure itself (contraction count/decay, volume dry-up, base length --
+# all read from the persisted vcp_results_weekly booleans) versus the daily
+# entry-confirmation signals (tight closes, pivot proximity, breakout).
+vcp_component_weights:
+  structure: 0.70
+  daily_confirmation: 0.30
+
+volume:
+  # up_down_volume_ratio is clipped to this range and rescaled to 0-100
+  # before the accumulation/spike bonuses are added.
+  ratio_floor: 0.5
+  ratio_ceiling: 2.0
+  accumulation_bonus: 15
+  spike_bonus: 15
+
+# VCP gate thresholds (contraction_tolerance, volume_decay_min/max,
+# min/max contractions, base_length_min/max_weeks) are NOT duplicated here.
+# They live in config/vcp.yaml, which is what sepa_scanner/analytics/vcp_detector.py
+# actually reads. When sepa_scanner/scoring/scorer.py is implemented, it should
+# load those thresholds from vcp.yaml rather than keeping a second copy here --
+# two copies previously existed and could silently drift apart.
